@@ -16,4 +16,4 @@ def home():
 
 if __name__ == '__main__':
     # Make sure to run this file with 'python app.py'
-    app.run(debug=True)
+    app.run(host="0.0.0.0", debug=False, port=5000)
