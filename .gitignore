@@ -1,0 +1,15 @@
+# Python
+# Caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Dependencies
+# venv directory
+venv/
+.venv/
+
+# Environment variables
+.env
+.env.*
