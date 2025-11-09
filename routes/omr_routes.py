@@ -20,15 +20,26 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "")
 TOKEN_EXPIRY_HOURS = 24
 
 # GitHub Configuration
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")  # Set this in Render.com environment variables
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()  # Remove any whitespace
 GITHUB_USERNAME = "XHiman"
 GITHUB_REPO = "backend"
 GITHUB_BRANCH = "master"
 USERS_CSV_PATH = "data/users.csv"  # Path in the repository
 
-# GitHub API base URL
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_USERNAME}/{GITHUB_REPO}/contents/{USERS_CSV_PATH}"
+# Local fallback path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOCAL_CSV_PATH = os.path.join(BASE_DIR, "..", "data", "users.csv")
+LOCAL_CSV_PATH = os.path.normpath(LOCAL_CSV_PATH)
 
+# Ensure local data directory exists
+os.makedirs(os.path.dirname(LOCAL_CSV_PATH), exist_ok=True)
+
+# GitHub API URLs
+GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_USERNAME}/{GITHUB_REPO}/contents/{USERS_CSV_PATH}"
+GITHUB_REPO_URL = f"https://api.github.com/repos/{GITHUB_USERNAME}/{GITHUB_REPO}"
+
+# Flag to track if GitHub is available
+USE_GITHUB = bool(GITHUB_TOKEN)
 
 def get_client_ip() -> str:
     """Get client IP address from request, safely."""
@@ -43,25 +54,43 @@ def get_client_ip() -> str:
     return request.remote_addr or 'Unknown'
 
 
+def verify_github_access() -> bool:
+    """Verify GitHub API access"""
+    if not GITHUB_TOKEN:
+        return False
+    
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+    
+    try:
+        response = requests.get(GITHUB_REPO_URL, headers=headers, timeout=5)
+        return response.status_code == 200
+    except:
+        return False
+
+
 def get_github_file() -> Tuple[str, str]:
     """
     Get the users.csv file from GitHub
     Returns: (content, sha) tuple
     """
-    if not GITHUB_TOKEN:
-        print("Warning: GITHUB_TOKEN not set")
+    if not USE_GITHUB:
         return "", ""
     
     headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28"
     }
     
     try:
-        response = requests.get(GITHUB_API_URL, headers=headers)
+        response = requests.get(GITHUB_API_URL, headers=headers, timeout=10)
         
         if response.status_code == 404:
-            # File doesn't exist, create initial CSV structure
+            # File doesn't exist, return empty CSV with headers
             return "email,phone_number,password_hash,ip_address,created_at,last_login\n", ""
         
         if response.status_code == 200:
@@ -82,13 +111,13 @@ def update_github_file(content: str, message: str, sha: str = "") -> bool:
     """
     Update or create the users.csv file on GitHub
     """
-    if not GITHUB_TOKEN:
-        print("Error: GITHUB_TOKEN not set")
+    if not USE_GITHUB:
         return False
     
     headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28"
     }
     
     # Encode content to base64
@@ -106,7 +135,7 @@ def update_github_file(content: str, message: str, sha: str = "") -> bool:
         payload["sha"] = sha
     
     try:
-        response = requests.put(GITHUB_API_URL, headers=headers, json=payload)
+        response = requests.put(GITHUB_API_URL, headers=headers, json=payload, timeout=10)
         
         if response.status_code in [200, 201]:
             print(f"Successfully updated GitHub file: {message}")
@@ -120,103 +149,177 @@ def update_github_file(content: str, message: str, sha: str = "") -> bool:
         return False
 
 
-def load_users() -> Dict[str, Dict[str, Any]]:
-    """Load users from GitHub CSV file"""
+def load_users_from_local() -> Dict[str, Dict[str, Any]]:
+    """Load users from local CSV file"""
     users = {}
     
-    content, _ = get_github_file()
-    
-    if not content:
+    if not os.path.exists(LOCAL_CSV_PATH):
         return users
     
     try:
-        # Parse CSV content
-        csv_reader = csv.DictReader(io.StringIO(content))
-        for row in csv_reader:
-            users[row['email']] = {
-                'email': row['email'],
-                'phoneNumber': row['phone_number'],
-                'password_hash': row['password_hash'],
-                'ip_address': row['ip_address'],
-                'created_at': row['created_at'],
-                'last_login': row.get('last_login', '')
-            }
+        with open(LOCAL_CSV_PATH, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                users[row['email']] = {
+                    'email': row['email'],
+                    'phoneNumber': row['phone_number'],
+                    'password_hash': row['password_hash'],
+                    'ip_address': row['ip_address'],
+                    'created_at': row['created_at'],
+                    'last_login': row.get('last_login', '')
+                }
     except Exception as e:
-        print(f"Error parsing users CSV: {e}")
+        print(f"Error reading local CSV: {e}")
     
     return users
 
 
-def save_user(email: str, phone_number: str, password_hash: str, ip_address: str) -> bool:
-    """Save new user to GitHub CSV file"""
+def save_user_to_local(email: str, phone_number: str, password_hash: str, ip_address: str) -> bool:
+    """Save user to local CSV file"""
     try:
-        # Get current file content and SHA
-        content, sha = get_github_file()
+        # Create file if it doesn't exist
+        if not os.path.exists(LOCAL_CSV_PATH):
+            with open(LOCAL_CSV_PATH, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['email', 'phone_number', 'password_hash', 'ip_address', 'created_at', 'last_login'])
         
-        # Add new user row
-        created_at = datetime.datetime.utcnow().isoformat()
-        new_row = f"{email},{phone_number},{password_hash},{ip_address},{created_at},\n"
+        # Append user
+        with open(LOCAL_CSV_PATH, 'a', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            created_at = datetime.datetime.utcnow().isoformat()
+            writer.writerow([email, phone_number, password_hash, ip_address, created_at, ''])
         
-        # Append to content
-        updated_content = content + new_row
-        
-        # Commit to GitHub
-        commit_message = f"Register new user: {email}"
-        return update_github_file(updated_content, commit_message, sha)
-    
+        return True
     except Exception as e:
-        print(f"Error saving user: {e}")
+        print(f"Error saving to local CSV: {e}")
         return False
+
+
+def update_last_login_local(email: str, ip_address: str) -> bool:
+    """Update last login in local CSV"""
+    try:
+        users = load_users_from_local()
+        
+        if email not in users:
+            return False
+        
+        # Update the user
+        users[email]['last_login'] = datetime.datetime.utcnow().isoformat()
+        users[email]['ip_address'] = ip_address
+        
+        # Rewrite CSV
+        with open(LOCAL_CSV_PATH, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['email', 'phone_number', 'password_hash', 'ip_address', 'created_at', 'last_login'])
+            for user in users.values():
+                writer.writerow([
+                    user['email'],
+                    user['phoneNumber'],
+                    user['password_hash'],
+                    user['ip_address'],
+                    user['created_at'],
+                    user['last_login']
+                ])
+        
+        return True
+    except Exception as e:
+        print(f"Error updating local CSV: {e}")
+        return False
+
+
+def load_users() -> Dict[str, Dict[str, Any]]:
+    """Load users from GitHub or local CSV (fallback)"""
+    users = {}
+    
+    # Try GitHub first if configured
+    if USE_GITHUB:
+        content, _ = get_github_file()
+        
+        if content:
+            try:
+                csv_reader = csv.DictReader(io.StringIO(content))
+                for row in csv_reader:
+                    users[row['email']] = {
+                        'email': row['email'],
+                        'phoneNumber': row['phone_number'],
+                        'password_hash': row['password_hash'],
+                        'ip_address': row['ip_address'],
+                        'created_at': row['created_at'],
+                        'last_login': row.get('last_login', '')
+                    }
+                print("Loaded users from GitHub")
+                return users
+            except Exception as e:
+                print(f"Error parsing GitHub CSV: {e}")
+    
+    # Fallback to local CSV
+    print("Using local CSV storage")
+    return load_users_from_local()
+
+
+def save_user(email: str, phone_number: str, password_hash: str, ip_address: str) -> bool:
+    """Save new user to GitHub and/or local CSV"""
+    success_local = save_user_to_local(email, phone_number, password_hash, ip_address)
+    
+    # Try GitHub if configured
+    if USE_GITHUB:
+        try:
+            content, sha = get_github_file()
+            created_at = datetime.datetime.utcnow().isoformat()
+            new_row = f"{email},{phone_number},{password_hash},{ip_address},{created_at},\n"
+            updated_content = content + new_row
+            commit_message = f"Register new user: {email}"
+            
+            if update_github_file(updated_content, commit_message, sha):
+                print("User saved to GitHub")
+                return True
+        except Exception as e:
+            print(f"GitHub save failed: {e}")
+    
+    # Return local success if GitHub fails
+    return success_local
 
 
 def update_last_login(email: str, ip_address: str) -> bool:
-    """Update last login timestamp and IP for a user in GitHub"""
-    try:
-        # Get current file
-        content, sha = get_github_file()
-        
-        if not content:
-            return False
-        
-        # Parse CSV
-        lines = content.strip().split('\n')
-        if len(lines) < 1:
-            return False
-        
-        header = lines[0]
-        data_lines = lines[1:]
-        
-        # Update the user's row
-        updated_lines = [header]
-        user_found = False
-        last_login = datetime.datetime.utcnow().isoformat()
-        
-        for line in data_lines:
-            if not line.strip():
-                continue
-            
-            parts = line.split(',')
-            if len(parts) >= 6 and parts[0] == email:
-                # Update this user's last_login and ip_address
-                parts[3] = ip_address  # Update IP
-                parts[5] = last_login  # Update last_login
-                user_found = True
-            
-            updated_lines.append(','.join(parts))
-        
-        if not user_found:
-            return False
-        
-        # Reconstruct CSV content
-        updated_content = '\n'.join(updated_lines) + '\n'
-        
-        # Commit to GitHub
-        commit_message = f"Update login for user: {email}"
-        return update_github_file(updated_content, commit_message, sha)
+    """Update last login timestamp and IP"""
+    success_local = update_last_login_local(email, ip_address)
     
-    except Exception as e:
-        print(f"Error updating last login: {e}")
-        return False
+    # Try GitHub if configured
+    if USE_GITHUB:
+        try:
+            content, sha = get_github_file()
+            
+            if content:
+                lines = content.strip().split('\n')
+                if len(lines) < 1:
+                    return success_local
+                
+                header = lines[0]
+                data_lines = lines[1:]
+                updated_lines = [header]
+                last_login = datetime.datetime.utcnow().isoformat()
+                
+                for line in data_lines:
+                    if not line.strip():
+                        continue
+                    
+                    parts = line.split(',')
+                    if len(parts) >= 6 and parts[0] == email:
+                        parts[3] = ip_address
+                        parts[5] = last_login
+                    
+                    updated_lines.append(','.join(parts))
+                
+                updated_content = '\n'.join(updated_lines) + '\n'
+                commit_message = f"Update login for user: {email}"
+                
+                if update_github_file(updated_content, commit_message, sha):
+                    print("Login updated on GitHub")
+                    return True
+        except Exception as e:
+            print(f"GitHub update failed: {e}")
+    
+    return success_local
 
 
 @omr_bp.route('/omrcheck', methods=['POST'])
@@ -266,7 +369,7 @@ def omr_check():
     # 2. Read the correct answers CSV
     # ----------------------------
     try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))   # backend/routes/
+        base_dir = os.path.dirname(os.path.abspath(__file__))
         correct_answers_path = os.path.join(base_dir, "..", "data", "Answerkey_Test.csv")
         correct_answers_path = os.path.normpath(correct_answers_path)
 
@@ -302,7 +405,7 @@ def omr_check():
         return jsonify({"error": "Error processing correct answers file"}), 500
 
     # ----------------------------
-    # 3. Compare (treat missing answers as wrong)
+    # 3. Compare
     # ----------------------------
     correct_count = 0
     attempted_count = 0
@@ -357,30 +460,10 @@ def generate_token(email: str) -> str:
 def v3rify() -> Tuple[Any, int]:
     """
     Unified endpoint for user authentication (login/register)
-    Saves user data to GitHub repository
-    
-    Expected JSON body:
-    {
-        "action": "login" | "register",
-        "email": "user@example.com",
-        "password": "password123",
-        "phoneNumber": "1234567890"  # Only for register
-    }
-    
-    Returns:
-    {
-        "success": true/false,
-        "message": "Success or error message",
-        "token": "jwt_token",  # Only on success
-        "user": {
-            "email": "user@example.com",
-            "phoneNumber": "1234567890"
-        }
-    }
+    Saves user data to GitHub and local CSV (fallback)
     """
     
     try:
-        # Get JSON data from request
         data = request.get_json()
         
         if not data:
@@ -392,63 +475,52 @@ def v3rify() -> Tuple[Any, int]:
         action = data.get('action', '').lower()
         email = data.get('email', '').strip().lower()
         password = data.get('password', '')
-        
-        # Get client IP address
         ip_address = get_client_ip()
         
-        # Validate action
         if action not in ['login', 'register']:
             return jsonify({
                 "success": False,
                 "message": "Invalid action. Must be 'login' or 'register'"
             }), 400
         
-        # Validate email
         if not email or not validate_email(email):
             return jsonify({
                 "success": False,
                 "message": "Invalid email address"
             }), 400
         
-        # Validate password
         if not password or len(password) < 6:
             return jsonify({
                 "success": False,
                 "message": "Password must be at least 6 characters long"
             }), 400
         
-        # Load existing users from GitHub
         users_db = load_users()
         
         # REGISTRATION
         if action == 'register':
             phone_number = data.get('phoneNumber', '').strip()
             
-            # Validate phone number
             if not phone_number or not validate_phone(phone_number):
                 return jsonify({
                     "success": False,
                     "message": "Invalid phone number. Must be 10 digits"
                 }), 400
             
-            # Check if user already exists
             if email in users_db:
                 return jsonify({
                     "success": False,
                     "message": "User with this email already exists"
                 }), 409
             
-            # Hash the password
             password_hash = generate_password_hash(password, method='pbkdf2:sha256')
             
-            # Save user to GitHub
             if not save_user(email, phone_number, password_hash, ip_address):
                 return jsonify({
                     "success": False,
-                    "message": "Failed to save user data to GitHub"
+                    "message": "Failed to save user data"
                 }), 500
             
-            # Generate token
             token = generate_token(email)
             
             print(f"User registered: {email} from IP: {ip_address}")
@@ -464,7 +536,6 @@ def v3rify() -> Tuple[Any, int]:
         
         # LOGIN
         elif action == 'login':
-            # Check if user exists
             if email not in users_db:
                 return jsonify({
                     "success": False,
@@ -473,17 +544,13 @@ def v3rify() -> Tuple[Any, int]:
             
             user = users_db[email]
             
-            # Verify password
             if not check_password_hash(user['password_hash'], password):
                 return jsonify({
                     "success": False,
                     "message": "Invalid email or password"
                 }), 401
             
-            # Update last login timestamp and IP on GitHub
             update_last_login(email, ip_address)
-            
-            # Generate token
             token = generate_token(email)
             
             print(f"User logged in: {email} from IP: {ip_address}")
@@ -499,14 +566,16 @@ def v3rify() -> Tuple[Any, int]:
     
     except Exception as e:
         print(f"Error in v3rify endpoint: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             "success": False,
             "message": "An internal error occurred. Please try again later."
         }), 500
+    
     return jsonify({"success": False, "message": "Unhandled case"}), 400
 
 
-# Optional: Token verification decorator
 def token_required(f):
     """Decorator to protect routes that require authentication"""
     @wraps(f)
@@ -520,15 +589,12 @@ def token_required(f):
             }), 401
         
         try:
-            # Remove 'Bearer ' prefix if present
             if token.startswith('Bearer '):
                 token = token[7:]
             
-            # Decode token
             payload = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
             current_user_email = payload['email']
             
-            # Load users from GitHub and check if user exists
             users_db = load_users()
             if current_user_email not in users_db:
                 return jsonify({
@@ -536,7 +602,6 @@ def token_required(f):
                     "message": "Invalid token"
                 }), 401
             
-            # Pass user info to the route via g object
             from flask import g
             g.current_user = users_db[current_user_email]
             
@@ -556,7 +621,6 @@ def token_required(f):
     return decorated
 
 
-# Example of protected route usage:
 @omr_bp.route('/profile', methods=['GET'])
 @token_required
 def get_profile():
@@ -574,6 +638,8 @@ def get_profile():
         }
     }), 200
 
+
+# Debug endpoints
 @omr_bp.route('/debug/config', methods=['GET'])
 def debug_config():
     """Debug endpoint to check configuration"""
@@ -584,7 +650,10 @@ def debug_config():
         "github_repo": GITHUB_REPO,
         "github_branch": GITHUB_BRANCH,
         "users_csv_path": USERS_CSV_PATH,
-        "secret_key_set": bool(SECRET_KEY)
+        "secret_key_set": bool(SECRET_KEY),
+        "use_github": USE_GITHUB,
+        "local_csv_path": LOCAL_CSV_PATH,
+        "local_csv_exists": os.path.exists(LOCAL_CSV_PATH)
     }), 200
 
 
@@ -595,17 +664,16 @@ def test_github():
         return jsonify({
             "success": False,
             "message": "GITHUB_TOKEN not set in environment variables"
-        }), 500
+        }), 200
     
     headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28"
     }
     
     try:
-        # Test repository access
-        repo_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{GITHUB_REPO}"
-        response = requests.get(repo_url, headers=headers)
+        response = requests.get(GITHUB_REPO_URL, headers=headers, timeout=10)
         
         if response.status_code == 200:
             return jsonify({
@@ -620,11 +688,12 @@ def test_github():
                 "success": False,
                 "message": "GitHub API connection failed",
                 "status_code": response.status_code,
-                "error": response.text
-            }), 500
+                "error": response.text,
+                "token_prefix": GITHUB_TOKEN[:10] + "..." if GITHUB_TOKEN else "None"
+            }), 200
     
     except Exception as e:
         return jsonify({
             "success": False,
             "message": f"Error: {str(e)}"
-        }), 500
+        }), 200
