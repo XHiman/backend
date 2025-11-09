@@ -80,6 +80,3 @@ Werkzeug==3.0.1
 
 # Optional: Database migrations
 Flask-Migrate==4.0.5
-
-# Optional: Input validation
-email-validator==2.1.0
