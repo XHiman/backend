@@ -573,3 +573,58 @@ def get_profile():
             "ip_address": user.get('ip_address', '')
         }
     }), 200
+
+@omr_bp.route('/debug/config', methods=['GET'])
+def debug_config():
+    """Debug endpoint to check configuration"""
+    return jsonify({
+        "github_token_set": bool(GITHUB_TOKEN),
+        "github_token_length": len(GITHUB_TOKEN) if GITHUB_TOKEN else 0,
+        "github_username": GITHUB_USERNAME,
+        "github_repo": GITHUB_REPO,
+        "github_branch": GITHUB_BRANCH,
+        "users_csv_path": USERS_CSV_PATH,
+        "secret_key_set": bool(SECRET_KEY)
+    }), 200
+
+
+@omr_bp.route('/debug/test-github', methods=['GET'])
+def test_github():
+    """Test GitHub API connection"""
+    if not GITHUB_TOKEN:
+        return jsonify({
+            "success": False,
+            "message": "GITHUB_TOKEN not set in environment variables"
+        }), 500
+    
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json"
+    }
+    
+    try:
+        # Test repository access
+        repo_url = f"https://api.github.com/repos/{GITHUB_USERNAME}/{GITHUB_REPO}"
+        response = requests.get(repo_url, headers=headers)
+        
+        if response.status_code == 200:
+            return jsonify({
+                "success": True,
+                "message": "GitHub API connection successful",
+                "repo_access": True,
+                "repo_name": response.json().get('name'),
+                "private": response.json().get('private')
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "message": "GitHub API connection failed",
+                "status_code": response.status_code,
+                "error": response.text
+            }), 500
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }), 500

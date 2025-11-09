@@ -9,6 +9,7 @@ CORS(app, resources={
     r"/*": {
         "origins": [
             "https://hippos.digital",
+            "https://backend-x873.onrender.com/",
             "http://localhost:3000",
             "http://localhost:5173"
         ],
