@@ -530,6 +530,7 @@ def omr_check():
     Returns: Score statistics
     """
     try:
+        jsonify({"message": "OMR check initiated"})
         # Validate file upload
         if 'csv' not in request.files:
             return jsonify({"error": "No CSV file uploaded"}), 400
