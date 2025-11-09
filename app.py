@@ -1,6 +1,6 @@
 from flask import Flask
 from flask_cors import CORS
-from routes.omr_routes_csv import omr_bpc  # Import your blueprint
+from routes.omr_routes import omr_bp  # Import your blueprint
 
 app = Flask(__name__)
 
@@ -21,7 +21,7 @@ CORS(app, resources={
 })
 
 # Register the blueprint
-app.register_blueprint(omr_bpc)
+app.register_blueprint(omr_bp)
 
 # Define a simple home route for testing
 @app.route('/')
