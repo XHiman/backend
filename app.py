@@ -1,10 +1,24 @@
 from flask import Flask
 from flask_cors import CORS
-from routes.omr_routes_csv import omr_bpc # Import your blueprint
+from routes.omr_routes_csv import omr_bpc  # Import your blueprint
 
 app = Flask(__name__)
-# Enable CORS for all routes within the omr_bp blueprint
-CORS(app, resources={r"/omrcheck/*": {"origins": "*"}})
+
+# Configure CORS for production
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "https://hippos.digital",
+            "http://localhost:3000",
+            "http://localhost:5173"
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True,
+        "max_age": 3600
+    }
+})
 
 # Register the blueprint
 app.register_blueprint(omr_bpc)
