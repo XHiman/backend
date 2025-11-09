@@ -1,78 +1,30 @@
-from flask import Blueprint, request, jsonify
-import json
+from flask import jsonify, request
 from werkzeug.security import generate_password_hash, check_password_hash
 import re
-import jwt  # PyJWT
+import jwt
 import datetime
 from functools import wraps
-from typing import Dict, Any, Tuple
 
-
-# Create a blueprint named 'omr_bp'
-omr_bp = Blueprint('omr_bp', __name__)
-
-# Configuration
-SECRET_KEY = "your-secret-key-here-change-this-in-production"
+# Configuration (adjust these to your setup)
+SECRET_KEY = "your-secret-key-here"  # Change this to a secure secret key
 TOKEN_EXPIRY_HOURS = 24
 
-# In-memory database (replace with actual database)
-users_db: Dict[str, Dict[str, Any]] = {}
+# Database setup (adjust based on your database choice)
+# This example uses a simple dict for demonstration
+# Replace with your actual database (MongoDB, PostgreSQL, SQLite, etc.)
+users_db = {}  # Format: { "email": { "email": "", "phone": "", "password_hash": "" } }
 
-
-@omr_bp.route('/omrcheck', methods=['POST'])
-def omr_check():
-    print("OMR check endpoint hit.")
-
-    # 1. Get the JSON data from the request
-    try:
-        submitted_data = request.get_json(force=True)
-        submitted_answers = submitted_data.get('omr_answers', {})
-    except Exception as e:
-        print(f"Error reading JSON: {e}")
-        return jsonify({"error": "Invalid JSON format"}), 400
-
-    # 2. Read the correct answers from backend/data/Answerkey_Test.json
-    try:
-        with open('backend/data/Answerkey_Test.json', 'r') as f:
-            correct_answers_data = json.load(f)
-            correct_answers = correct_answers_data.get('omr_answers', {})
-    except FileNotFoundError:
-        print("backend/data/Answerkey_Test.json not found.")
-        return jsonify({"error": "Correct answers file not found"}), 500
-    except Exception as e:
-        print(f"Error reading correct answers file: {e}")
-        return jsonify({"error": "Error processing correct answers file"}), 500
-        
-    # 3. Compare the answers and calculate the score
-    correct_count = 0
-    for question_number, user_answer in submitted_answers.items():
-        if question_number in correct_answers and user_answer == correct_answers[question_number]:
-            correct_count += 1
-
-    # 4. Return the result to the frontend
-    result = {
-        "message": "OMR sheet checked successfully!",
-        "total_correct": correct_count,
-        "total_questions": len(correct_answers)
-    }
-    
-    print(f"Result: {result}")
-    return jsonify(result), 200
-
-
-def validate_email(email: str) -> bool:
+def validate_email(email):
     """Validate email format"""
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email) is not None
 
-
-def validate_phone(phone: str) -> bool:
+def validate_phone(phone):
     """Validate phone number (10 digits)"""
     pattern = r'^\d{10}$'
     return re.match(pattern, phone) is not None
 
-
-def generate_token(email: str) -> str:
+def generate_token(email):
     """Generate JWT token"""
     try:
         payload = {
@@ -83,12 +35,10 @@ def generate_token(email: str) -> str:
         token = jwt.encode(payload, SECRET_KEY, algorithm='HS256')
         return token
     except Exception as e:
-        print(f"Token generation error: {e}")
-        return ""
-
+        return None
 
 @omr_bp.route('/v3rify', methods=['POST'])
-def v3rify() -> Tuple[Any, int]:
+def v3rify():
     """
     Unified endpoint for user authentication (login/register)
     
@@ -123,7 +73,7 @@ def v3rify() -> Tuple[Any, int]:
             }), 400
         
         action = data.get('action', '').lower()
-        email = data.get('email', '').strip().lower()
+        email = data.get('email', '').strip()
         password = data.get('password', '')
         
         # Validate action
@@ -179,7 +129,6 @@ def v3rify() -> Tuple[Any, int]:
             # Generate token
             token = generate_token(email)
             
-            print(f"User registered: {email}")
             return jsonify({
                 "success": True,
                 "message": "Registration successful",
@@ -211,7 +160,6 @@ def v3rify() -> Tuple[Any, int]:
             # Generate token
             token = generate_token(email)
             
-            print(f"User logged in: {email}")
             return jsonify({
                 "success": True,
                 "message": "Login successful",
@@ -228,8 +176,6 @@ def v3rify() -> Tuple[Any, int]:
             "success": False,
             "message": "An internal error occurred. Please try again later."
         }), 500
-    return jsonify({"success": False, "message": "Unhandled case"}), 400
-
 
 
 # Optional: Token verification decorator
@@ -261,9 +207,8 @@ def token_required(f):
                     "message": "Invalid token"
                 }), 401
             
-            # Pass user info to the route via g object
-            from flask import g
-            g.current_user = users_db[current_user_email]
+            # Pass user info to the route
+            request.current_user = users_db[current_user_email]
             
         except jwt.ExpiredSignatureError:
             return jsonify({
@@ -282,17 +227,11 @@ def token_required(f):
 
 
 # Example of protected route usage:
-@omr_bp.route('/profile', methods=['GET'])
-@token_required
-def get_profile():
-    """Example protected route"""
-    from flask import g
-    user = g.current_user
-    return jsonify({
-        "success": True,
-        "user": {
-            "email": user['email'],
-            "phoneNumber": user['phoneNumber'],
-            "created_at": user['created_at']
-        }
-    }), 200
+# @omr_bp.route('/protected', methods=['GET'])
+# @token_required
+# def protected_route():
+#     user = request.current_user
+#     return jsonify({
+#         "success": True,
+#         "message": f"Hello {user['email']}!"
+#     })
