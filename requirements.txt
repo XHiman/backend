@@ -78,9 +78,6 @@ pymongo==4.6.1  # For MongoDB
 PyJWT==2.8.0
 Werkzeug==3.0.1
 
-# Environment variables
-python-dotenv==1.0.0
-
 # Optional: Database migrations
 Flask-Migrate==4.0.5
 
